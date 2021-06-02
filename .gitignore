@@ -1,6 +1,7 @@
 configure
 build_data.c
 cscope.out
+cscope.files
 crashlib.a
 *.o
 crash
