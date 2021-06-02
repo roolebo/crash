@@ -74,6 +74,7 @@ struct diskdump_data {
 	ulong	evictions;		/* total evictions done */
 	ulong	cached_reads;
 	ulong  *valid_pages;
+	ulong   total_valid_pages;      /* expected number of dumpable pages */
 	ulong   accesses;
 	ulong	snapshot_task;
 };
@@ -877,11 +878,14 @@ restart:
 	}
 
 	dd->valid_pages = calloc(sizeof(ulong), max_sect_len + 1);
+	dd->total_valid_pages = 0;
 	for (i = 1; i < max_sect_len + 1; i++) {
 		dd->valid_pages[i] = dd->valid_pages[i - 1];
 		for (j = 0; j < BITMAP_SECT_LEN; j++, pfn++)
-			if (page_is_dumpable(pfn))
+			if (page_is_dumpable(pfn)) {
 				dd->valid_pages[i]++;
+				dd->total_valid_pages++;
+			}
 	}
 
         return TRUE;
@@ -2090,6 +2094,7 @@ __diskdump_memory_dump(FILE *fp)
 	else
 		fprintf(fp, "\n");
 	fprintf(fp, "       valid_pages: %lx\n", (ulong)dd->valid_pages);
+	fprintf(fp, " total_valid_pages: %lx\n", dd->total_valid_pages);
 
 	return 0;
 }
