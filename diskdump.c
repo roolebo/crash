@@ -23,6 +23,8 @@
  * GNU General Public License for more details.
  */
 
+#define _LARGEFILE64_SOURCE 1  /* stat64() */
+
 #include "defs.h"
 #include "diskdump.h"
 #include "xen_dom0.h"
@@ -548,6 +550,12 @@ read_dump_header(char *file)
 	ulong pfn;
 	int i, j, max_sect_len;
 	int is_split = 0;
+	struct stat64 stat;
+	page_desc_t pd;
+	ulong page_idx;
+	ulong first_empty_pd = 0;
+	int zero_page_counted = 0;
+	size_t expected_size = 0;
 
 	if (block_size < 0)
 		return FALSE;
@@ -898,13 +906,72 @@ restart:
 		pfn = start;
 	}
 
+	expected_size = dd->data_offset;
 	dd->valid_pages = calloc(sizeof(ulong), max_sect_len + 1);
 	dd->max_sect_len = max_sect_len;
 	for (i = 1; i < max_sect_len + 1; i++) {
 		dd->valid_pages[i] = dd->valid_pages[i - 1];
 		for (j = 0; j < BITMAP_SECT_LEN; j++, pfn++)
-			if (page_is_dumpable(pfn))
-				dd->valid_pages[i]++;
+			if (page_is_dumpable(pfn)) {
+				page_idx = dd->valid_pages[i]++;
+
+				offset = dd->data_offset +
+					 page_idx * sizeof(pd);
+
+				if (read_pd(dd->dfd, offset, &pd)) {
+					/*
+					 * Truncated page descriptor at most
+					 * references full page.
+					 */
+					expected_size += block_size;
+					goto next;
+				}
+
+				if (pd.offset == 0) {
+					if (!first_empty_pd)
+						first_empty_pd = page_idx;
+					/*
+					 * Incomplete pages at most use the
+					 * whole page.
+					 */
+					expected_size += block_size;
+				} else if (!pd.flags) {
+					/*
+					 * Zero page has no compression flags.
+					 */
+					if (!zero_page_counted) {
+						expected_size += block_size;
+						zero_page_counted = 1;
+					}
+				} else if (pd.flags) {
+					/* Regular compressed page */
+					expected_size += pd.size;
+				}
+
+next:
+				expected_size += sizeof(pd);
+			}
+	}
+
+	if (stat64(dd->filename, &stat) < 0) {
+		error(INFO, "%s: cannot stat %s\n",
+		      DISKDUMP_VALID() ? "diskdump" : "compressed kdump",
+		      dd->filename);
+		goto err;
+	}
+
+	if (expected_size > stat.st_size) {
+		error(WARNING,
+		      "%s: may be truncated or incomplete\n"
+		      "              data_offset: %zu\n"
+		      "               block_size: %d\n"
+		      "        total_valid_pages: %lu\n"
+		      "           first_empty_pd: %lu\n"
+		      "           bytes required: %zu\n"
+		      "            dumpfile size: %zu\n\n",
+		      dd->filename, dd->data_offset,
+		      dd->block_size, dd->valid_pages[dd->max_sect_len],
+		      first_empty_pd, expected_size, stat.st_size);
 	}
 
         return TRUE;
